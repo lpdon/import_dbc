@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate lazy_static;
+
 use std::fs;
 use std::error::Error;
 use regex::Regex;
@@ -8,7 +11,19 @@ pub struct Config {
 
 #[derive(Debug)]
 pub struct Dbc {
+    pub nodes: Vec<Node>,
     pub messages: Vec<Message>
+}
+
+#[derive(Debug, PartialEq)]
+enum DbcError {
+    WrongType,
+    InvalidContent
+}
+
+#[derive(Debug)]
+pub struct Node {
+    pub name: String
 }
 
 #[derive(Debug)]
@@ -17,18 +32,6 @@ pub struct Message {
     pub name: String,
     pub size: u8,
     pub signals: Vec<Signal>
-}
-
-#[derive(Debug, PartialEq)]
-enum MessageError {
-    NotMessage,
-    InvalidMessage
-}
-
-#[derive(Debug, PartialEq)]
-enum SignalError {
-    NotSignal,
-    InvalidSignal
 }
 
 #[derive(Clone, Debug)]
@@ -66,18 +69,29 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub fn parse(contents: &str) -> Dbc {
+    let mut nodes: Vec<Node> = Vec::new();
     let mut messages: Vec<Message> = Vec::new();
     let mut signals: Vec<Signal> = Vec::new();
 
     let mut in_message = false;
     for (i, line) in contents.lines().enumerate() {
         if !in_message {
+            match parse_nodes(line) {
+                Ok(new_nodes) => {
+                    nodes = new_nodes;
+                },
+                Err(DbcError::InvalidContent) => {
+                    panic!("Error when parsing line {}: {}. Invalid syntax for nodes.", i+1, line);
+                },
+                Err(_) => {},
+            }
+            
             match parse_message(line) {
                 Ok(new_message) => {
                     in_message = true;
                     messages.push(new_message);
                 },
-                Err(MessageError::InvalidMessage) => {
+                Err(DbcError::InvalidContent) => {
                     panic!("Error when parsing line {}: {}. Invalid message start.", i+1, line);
                 },
                 Err(_) => {},
@@ -90,7 +104,7 @@ pub fn parse(contents: &str) -> Dbc {
                     in_message = true;
                     signals.push(new_signal);
                 },
-                Err(SignalError::InvalidSignal) => {
+                Err(DbcError::InvalidContent) => {
                     panic!("Error when parsing line {}: {}. Invalid signal.", i+1, line);
                 },
                 Err(_) => {
@@ -112,23 +126,54 @@ pub fn parse(contents: &str) -> Dbc {
         current_message.signals = signals.clone();
     }
 
-    Dbc{ messages }
+    Dbc{ nodes, messages }
 }
 
-fn parse_message(content: &str) -> Result<Message, MessageError> {
+fn parse_nodes(content: &str) -> Result<Vec<Node>, DbcError> {
     let content = content.trim();
-    let re = Regex::new(r"BO_ (\w+) (\w+) *: (\w+) (\w+).*").unwrap();
-    
-    if !re.is_match(content) {
-        if !content.contains("BO_ ") {
-            return Err(MessageError::NotMessage);
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r"BU_: (\w+\s*)+").unwrap();
+        static ref RE_NODE: Regex = Regex::new(r"(\w+)").unwrap();
+    }
+
+    if !RE.is_match(content) {
+        if !content.contains("BU_ ") {
+            return Err(DbcError::WrongType);
         }
         else {
-            return Err(MessageError::InvalidMessage);
+            return Err(DbcError::InvalidContent);
         }
     }
     
-    let cap = re.captures(content).unwrap();
+    let mut nodes: Vec<Node> = Vec::new();
+
+    for cap in RE_NODE.captures_iter(content) {
+        let name = cap[0].to_string();
+        if name != "BU_" {
+            let node = Node{ name: cap[0].to_string() }; 
+            nodes.push(node);
+        }
+    }
+
+    Ok(nodes)
+}
+
+fn parse_message(content: &str) -> Result<Message, DbcError> {
+    let content = content.trim();
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r"BO_ (\w+) (\w+) *: (\w+) (\w+).*").unwrap();
+    }
+    
+    if !RE.is_match(content) {
+        if !content.contains("BO_ ") {
+            return Err(DbcError::WrongType);
+        }
+        else {
+            return Err(DbcError::InvalidContent);
+        }
+    }
+    
+    let cap = RE.captures(content).unwrap();
 
     Ok (
         Message { 
@@ -140,20 +185,22 @@ fn parse_message(content: &str) -> Result<Message, MessageError> {
     )
 }
 
-fn parse_signal(content: &str) -> Result<Signal, SignalError> {
+fn parse_signal(content: &str) -> Result<Signal, DbcError> {
     let content = content.trim();
-    let re = Regex::new(r#"SG_ (\w+) : (\d+)\|(\d+)@(\d+)([\+|\-]) \(([0-9.+\-eE]+),([0-9.+\-eE]+)\) \[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\] "(.*)" (.*)"#).unwrap();
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r#"SG_ (\w+) : (\d+)\|(\d+)@(\d+)([\+|\-]) \(([0-9.+\-eE]+),([0-9.+\-eE]+)\) \[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\] "(.*)" (.*)"#).unwrap();
+    }
 
-    if !re.is_match(content) {
+    if !RE.is_match(content) {
         if !content.contains("SG_ ") {
-            return Err(SignalError::NotSignal);
+            return Err(DbcError::WrongType);
         }
         else {
-            return Err(SignalError::InvalidSignal);
+            return Err(DbcError::InvalidContent);
         }
     }
 
-    let cap = re.captures(content).unwrap();
+    let cap = RE.captures(content).unwrap();
 
     Ok (
         Signal { 
@@ -210,13 +257,13 @@ BO_ 2565986819 MsgDummy3: 8 TCU
     #[test]
     fn invalid_message_start() {
         let content = "BO_ 2566117891 MsgDummy1: Vector__XXX";
-        assert_eq!(parse_message(content).err().unwrap(), MessageError::InvalidMessage);
+        assert_eq!(parse_message(content).err().unwrap(), DbcError::InvalidContent);
     }
 
     #[test]
     fn not_message() {
         let content = "SG_ dummy1sg1 : 34|2@1+ (1,0) [0|3] \"kkk\" Vector__XXX";
-        assert_eq!(parse_message(content).err().unwrap(), MessageError::NotMessage);
+        assert_eq!(parse_message(content).err().unwrap(), DbcError::WrongType);
     }
 
     #[test]
@@ -228,13 +275,13 @@ BO_ 2565986819 MsgDummy3: 8 TCU
     #[test]
     fn invalid_signal() {
         let content = "SG_ dummy1sg1 : 34|21+ (1,0) [0|3] \"kkk\" Vector__XXX";
-        assert_eq!(parse_signal(content).err().unwrap(), SignalError::InvalidSignal);
+        assert_eq!(parse_signal(content).err().unwrap(), DbcError::InvalidContent);
     }
 
     #[test]
     fn not_signal() {
         let content = "BO_ 2566117891 MsgDummy1: 8 Vector__XXX";
-        assert_eq!(parse_signal(content).err().unwrap(), SignalError::NotSignal);
+        assert_eq!(parse_signal(content).err().unwrap(), DbcError::WrongType);
     }
 
     #[test]
@@ -258,5 +305,13 @@ BO_ 2565986819 MsgDummy3: 8 TCU
         assert_eq!(messages[1].signals[0].unit, "deg");
         assert_eq!(messages[1].signals[0].is_little_endian, false);
         assert_eq!(messages[1].signals[0].is_signed, true);
+    }
+
+    #[test]
+    fn nodes() {
+        let content = "BU_: TCU VEHICLE";
+        let nodes = parse_nodes(content).unwrap();
+        assert_eq!(nodes[0].name, "TCU");
+        assert_eq!(nodes[1].name, "VEHICLE");
     }
 }
