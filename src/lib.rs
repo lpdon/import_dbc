@@ -1,8 +1,6 @@
-#[macro_use]
-extern crate lazy_static;
-
 use std::fs;
 use std::error::Error;
+use lazy_static::lazy_static;
 use regex::Regex;
 
 pub struct Config {
@@ -19,6 +17,12 @@ pub struct Dbc {
 enum DbcError {
     WrongType,
     InvalidContent
+}
+
+trait DbcType {
+    const TAG: &'static str;
+    const REGEX: &'static str;
+    fn from(cap: &regex::Captures) -> Self;
 }
 
 #[derive(Debug)]
@@ -76,7 +80,7 @@ pub fn parse(contents: &str) -> Dbc {
     let mut in_message = false;
     for (i, line) in contents.lines().enumerate() {
         if !in_message {
-            match parse_nodes(line) {
+            match parse_type_vec(line) {
                 Ok(new_nodes) => {
                     nodes = new_nodes;
                 },
@@ -86,7 +90,7 @@ pub fn parse(contents: &str) -> Dbc {
                 Err(_) => {},
             }
             
-            match parse_message(line) {
+            match parse_type(line) {
                 Ok(new_message) => {
                     in_message = true;
                     messages.push(new_message);
@@ -99,7 +103,7 @@ pub fn parse(contents: &str) -> Dbc {
         }
         else {
             let current_message = messages.last_mut().unwrap();
-            match parse_signal(line) {
+            match parse_type(line) {
                 Ok(new_signal) => {
                     in_message = true;
                     signals.push(new_signal);
@@ -129,7 +133,10 @@ pub fn parse(contents: &str) -> Dbc {
     Dbc{ nodes, messages }
 }
 
-impl Node {
+impl DbcType for Node {
+    const TAG: &'static str = "BU_: ";
+    const REGEX: &'static str = r"(\w+)";
+
     fn from(cap: &regex::Captures) -> Self {
         Node { 
             name: cap[0].to_string(),
@@ -137,36 +144,10 @@ impl Node {
     }
 }
 
-fn parse_nodes(content: &str) -> Result<Vec<Node>, DbcError> {
-    let content = content.trim();
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"BU_: (\w+\s*)+").unwrap();
-        static ref RE_NODE: Regex = Regex::new(r"(\w+)").unwrap();
-    }
+impl DbcType for Message {
+    const TAG: &'static str = "BO_ ";
+    const REGEX: &'static str = r"BO_ (\w+) (\w+) *: (\w+) (\w+).*";
 
-    if !RE.is_match(content) {
-        if !content.starts_with("BU_ ") {
-            return Err(DbcError::WrongType);
-        }
-        else {
-            return Err(DbcError::InvalidContent);
-        }
-    }
-    
-    let mut nodes: Vec<Node> = Vec::new();
-
-    for cap in RE_NODE.captures_iter(content) {
-        let name = cap[0].to_string();
-        if name != "BU_" {
-            let node = Node::from(&cap);
-            nodes.push(node);
-        }
-    }
-
-    Ok(nodes)
-}
-
-impl Message {
     fn from(cap: &regex::Captures) -> Self {
         Message { 
             id: cap[1].parse::<u32>().unwrap(),
@@ -177,29 +158,10 @@ impl Message {
     }
 }
 
-fn parse_message(content: &str) -> Result<Message, DbcError> {
-    let content = content.trim();
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"BO_ (\w+) (\w+) *: (\w+) (\w+).*").unwrap();
-    }
-    
-    if !RE.is_match(content) {
-        if !content.starts_with("BO_ ") {
-            return Err(DbcError::WrongType);
-        }
-        else {
-            return Err(DbcError::InvalidContent);
-        }
-    }
-    
-    let cap = RE.captures(content).unwrap();
+impl DbcType for Signal {
+    const TAG: &'static str = "SG_ ";
+    const REGEX: &'static str = r#"SG_ (\w+) : (\d+)\|(\d+)@(\d+)([\+|\-]) \(([0-9.+\-eE]+),([0-9.+\-eE]+)\) \[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\] "(.*)" (.*)"#;
 
-    Ok (
-        Message::from(&cap)
-    )
-}
-
-impl Signal {
     fn from(cap: &regex::Captures) -> Self {
         Signal { 
             name: cap[1].to_string(),
@@ -216,14 +178,16 @@ impl Signal {
     }
 }
 
-fn parse_signal(content: &str) -> Result<Signal, DbcError> {
+fn parse_type<T: DbcType>(content: &str) -> Result<T, DbcError> {
     let content = content.trim();
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r#"SG_ (\w+) : (\d+)\|(\d+)@(\d+)([\+|\-]) \(([0-9.+\-eE]+),([0-9.+\-eE]+)\) \[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\] "(.*)" (.*)"#).unwrap();
-    }
+    ////lazy_static! {
+    ////    static ref RE: Regex = Regex::new(T::REGEX).unwrap();
+    ////}
+    //TODO: replace by static
+    let RE: Regex = Regex::new(T::REGEX).unwrap();
 
     if !RE.is_match(content) {
-        if !content.starts_with("SG_ ") {
+        if !content.starts_with(T::TAG) {
             return Err(DbcError::WrongType);
         }
         else {
@@ -234,13 +198,52 @@ fn parse_signal(content: &str) -> Result<Signal, DbcError> {
     let cap = RE.captures(content).unwrap();
 
     Ok (
-        Signal::from(&cap)
+        T::from(&cap)
     )
+}
+
+fn parse_type_vec<T: DbcType>(content: &str) -> Result<Vec<T>, DbcError> {
+    let content = content.trim();
+    //TODO: replace by static
+    let RE: Regex = Regex::new(T::REGEX).unwrap();
+
+    if !RE.is_match(content) {
+        if !content.starts_with(T::TAG) {
+            return Err(DbcError::WrongType);
+        }
+        else {
+            return Err(DbcError::InvalidContent);
+        }
+    }
+    
+    let mut objs: Vec<T> = Vec::new();
+
+    for cap in RE.captures_iter(content) {
+        let name = cap[0].to_string();
+        if name != "BU_" {
+            let node = T::from(&cap);
+            objs.push(node);
+        }
+    }
+
+    Ok(objs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_signal(contents: &str) -> Result<Signal, DbcError> {
+        parse_type::<Signal>(contents)
+    }
+
+    fn parse_message(contents: &str) -> Result<Message, DbcError> {
+        parse_type::<Message>(contents)
+    }
+
+    fn parse_nodes(contents: &str) -> Result<Vec<Node>, DbcError> {
+        parse_type_vec::<Node>(contents)
+    }
 
     struct Setup<'a>{
         test_messages: &'a str
