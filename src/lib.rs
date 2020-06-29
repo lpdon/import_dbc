@@ -2,6 +2,7 @@ use std::fs;
 use std::error::Error;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::HashMap;
 
 pub struct Config {
     pub filename: String,
@@ -134,7 +135,7 @@ pub fn parse(contents: &str) -> Dbc {
 }
 
 impl DbcType for Node {
-    const TAG: &'static str = "BU_: ";
+    const TAG: &'static str = "BU_";
     const REGEX: &'static str = r"(\w+)";
 
     fn from(cap: &regex::Captures) -> Self {
@@ -178,15 +179,21 @@ impl DbcType for Signal {
     }
 }
 
+lazy_static! {
+    static ref HASHMAP: HashMap<&'static str, Regex> = {
+        let mut m = HashMap::new();
+        m.insert(Node::REGEX, Regex::new(Node::REGEX).unwrap());
+        m.insert(Message::REGEX, Regex::new(Message::REGEX).unwrap());
+        m.insert(Signal::REGEX, Regex::new(Signal::REGEX).unwrap());
+        m
+    };
+}
+
 fn parse_type<T: DbcType>(content: &str) -> Result<T, DbcError> {
     let content = content.trim();
-    ////lazy_static! {
-    ////    static ref RE: Regex = Regex::new(T::REGEX).unwrap();
-    ////}
-    //TODO: replace by static
-    let RE: Regex = Regex::new(T::REGEX).unwrap();
+    let re = HASHMAP.get(T::REGEX).unwrap();
 
-    if !RE.is_match(content) {
+    if !re.is_match(content) {
         if !content.starts_with(T::TAG) {
             return Err(DbcError::WrongType);
         }
@@ -195,7 +202,7 @@ fn parse_type<T: DbcType>(content: &str) -> Result<T, DbcError> {
         }
     }
 
-    let cap = RE.captures(content).unwrap();
+    let cap = re.captures(content).unwrap();
 
     Ok (
         T::from(&cap)
@@ -204,10 +211,9 @@ fn parse_type<T: DbcType>(content: &str) -> Result<T, DbcError> {
 
 fn parse_type_vec<T: DbcType>(content: &str) -> Result<Vec<T>, DbcError> {
     let content = content.trim();
-    //TODO: replace by static
-    let RE: Regex = Regex::new(T::REGEX).unwrap();
+    let re = HASHMAP.get(T::REGEX).unwrap();
 
-    if !RE.is_match(content) {
+    if !re.is_match(content) {
         if !content.starts_with(T::TAG) {
             return Err(DbcError::WrongType);
         }
@@ -218,9 +224,9 @@ fn parse_type_vec<T: DbcType>(content: &str) -> Result<Vec<T>, DbcError> {
     
     let mut objs: Vec<T> = Vec::new();
 
-    for cap in RE.captures_iter(content) {
+    for cap in re.captures_iter(content) {
         let name = cap[0].to_string();
-        if name != "BU_" {
+        if name != T::TAG {
             let node = T::from(&cap);
             objs.push(node);
         }
