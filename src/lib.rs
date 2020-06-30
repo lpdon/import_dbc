@@ -213,13 +213,8 @@ fn parse_type_vec<T: DbcType>(content: &str) -> Result<Vec<T>, DbcError> {
     let content = content.trim();
     let re = HASHMAP.get(T::REGEX).unwrap();
 
-    if !re.is_match(content) {
-        if !content.starts_with(T::TAG) {
-            return Err(DbcError::WrongType);
-        }
-        else {
-            return Err(DbcError::InvalidContent);
-        }
+    if !content.starts_with(T::TAG) {
+        return Err(DbcError::WrongType);
     }
     
     let mut objs: Vec<T> = Vec::new();
@@ -340,6 +335,14 @@ BO_ 2565986819 MsgDummy3: 8 TCU
     fn nodes() {
         let content = "BU_: TCU VEHICLE";
         let nodes = parse_nodes(content).unwrap();
+        assert_eq!(nodes[0].name, "TCU");
+        assert_eq!(nodes[1].name, "VEHICLE");
+    }
+
+    #[test]
+    fn all_nodes() {
+        let setup = Setup::new();
+        let nodes = parse(setup.test_messages).nodes;
         assert_eq!(nodes[0].name, "TCU");
         assert_eq!(nodes[1].name, "VEHICLE");
     }
